@@ -4,6 +4,7 @@ import { ToolsMenu } from './ToolsMenu';
 import { useEffect, useRef, useState } from 'react';
 import { ITool, MessageAttachment } from '@/types';
 import { useSocket } from '@/context/SocketContext';
+import { useConversation } from "@elevenlabs/react";
 
 interface InputBarProps {
   text: string;
@@ -35,7 +36,6 @@ export const InputBar = ({
   onImageSelect,
 }: InputBarProps) => {
   const [toolBarOpen, setToolBarOpen] = useState(false);
-  const { socket } = useSocket();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
 
@@ -44,10 +44,9 @@ export const InputBar = ({
   const [partial, setPartial] = useState("");
   const [finalText, setFinalText] = useState("");
   const [aiResponse, setAiResponse] = useState("");
-  const [recording, setRecording] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const transcriptRef = useRef<string>("");
-
+  const [isRecording, setIsRecording] = useState(false);
   // MIC visualizer
   const micAudioCtxRef = useRef<AudioContext | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -58,40 +57,48 @@ export const InputBar = ({
   const aiAnimRef = useRef<number | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
 
+
+  const [finalTranscript, setFinalTranscript] = useState("");
+  const vadHistory = useRef<number[]>([]);
+  const PAUSE_THRESHOLD = 0.15; // adjust based on noise floor
+  const PAUSE_WINDOW = 5; // number of VAD events to check
+
+
+
+
+
   // AI response visualizer
   const responseCtxRef = useRef<AudioContext | null>(null);
   const responseAnalyserRef = useRef<AnalyserNode | null>(null);
   const responseDataRef = useRef<Uint8Array | null>(null);
+  const lastFinalTranscript = useRef("");
+  const vadScores = useRef<number[]>([]);
+  const lastTranscript = useRef("");
 
-  useEffect(() => {
-    if (!socket) return;
+  const { startSession, endSession } = useConversation({
+    onMessage: ({ message, source }) => {
+      console.log("message", message, source);
+      if (message?.trim()) {
+        if (source === "user") {
+          lastTranscript.current = message;
 
-    const handlePartial = (text: string) => {
-      setPartial((prev) => {
-        const newPartial = prev + text;
-        // Update ref with current accumulated transcript
-        transcriptRef.current = transcriptRef.current + text;
-        return newPartial;
-      });
-    };
+          setText(message);
 
-    const handleFinal = (text: string) => {
-      setFinalText((prev) => {
-        const newFinal = prev + (prev ? " " : "") + text;
-        // Update ref with current accumulated transcript
-        transcriptRef.current = transcriptRef.current + (transcriptRef.current ? " " : "") + text;
-        return newFinal;
-      });
-    };
+          onSend(selectedTool, message);
+        }
+      }
+    },
 
-    socket.on("partial", handlePartial);
-    socket.on("final", handleFinal);
+    onVadScore: ({ vadScore }) => {
+      if (vadScore < 0.15 && lastTranscript.current) {
+        console.log("🛑 Pause detected");
+        console.log("📄 Transcript:", lastTranscript.current);
 
-    return () => {
-      socket.off("partial", handlePartial);
-      socket.off("final", handleFinal);
-    };
-  }, [socket]);
+        // Use transcript here
+        lastTranscript.current = "";
+      }
+    }
+  });
 
   const handleToolPick = (tool: ITool) => {
     setToolBarOpen(false);
@@ -162,32 +169,28 @@ export const InputBar = ({
 
     console.log("start-audio");
     setIsInitializing(true);
-    socket?.emit("start-audio");
-    
-    const handleInitializationComplete = (data: any) => {
-      console.log("initialization-complete", data);
+    startSession({
+      agentId: "agent_8901kd5e9aatfzhs7xb68kdp3n3p",
+      connectionType: "webrtc",
+    }).then((sessionId) => {
+      console.log("sessionId", sessionId);
       setIsInitializing(false);
+      setIsRecording(true);
       handleStartRecording();
-      socket?.off("initialization-complete", handleInitializationComplete);
-    };
-
-    const handlePause = (data: any) => {
-      console.log("pause", data);
-      const transcript = data?.transcript || transcriptRef.current || finalText || partial;
-      console.log("transcript", transcript);
-      if (transcript && transcript.trim()) {
-        onSend(selectedTool, transcript.trim());
-        stopRecording();
-      }
-      socket?.off("pause", handlePause);
-    };
-
-    socket?.on("initialization-complete", handleInitializationComplete);
-    socket?.on("pause", handlePause);
+    });
+  }
+  function handleEndRecording() {
+    setIsRecording(false);
+    endSession();
+    setIsInitializing(false);
+    micStreamRef.current?.getTracks().forEach(track => track.stop());
+    micStreamRef.current = null;
+    micAudioCtxRef.current?.close();
+    micAudioCtxRef.current = null;
   }
   async function handleStartRecording() {
     // socket?.emit("handle-request");
-    setRecording(true);
+    setIsRecording(true);
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStreamRef.current = stream;
@@ -218,37 +221,13 @@ export const InputBar = ({
       "audio-processor"
     );
 
-    workletNode.port.onmessage = (e) => {
-      socket?.emit("audio", e.data);
-    };
 
     micSourceRef.current.connect(workletNode);
   }
-
-  function stopRecording() {
-    setRecording(false);
-    setIsInitializing(false);
-
-    // Clean up socket event listeners
-    socket?.off("pause");
-    socket?.off("initialization-complete");
-
-    // 🔥 Stop mic visualizer
-    if (micAnimRef.current !== null) {
-      cancelAnimationFrame(micAnimRef.current);
-      micAnimRef.current = null;
-    }
-    micStreamRef.current?.getTracks().forEach(track => track.stop());
-    micStreamRef.current = null;
-    // Reset bars to default height
-    const micBars = document.querySelectorAll(".mic-bar") as NodeListOf<HTMLElement>;
-    micBars.forEach(bar => (bar.style.height = "8px"));
-
-    // Stop audio context
-    micAudioCtxRef.current?.close();
-    micAudioCtxRef.current = null;
-    socket?.emit("close-audio");
+  function startRecording() {
+    console.log("start-recording");
   }
+
 
   return (
     <div className="absolute bottom-0 left-0 right-0 pb-6 px-6 z-50 pointer-events-none">
@@ -334,10 +313,10 @@ export const InputBar = ({
             </div>
 
             {/* Textarea Input */}
-              <div className="flex-1 relative px-2">
-                <textarea
-                  value={recording ? partial : text}
-                  onChange={handleTextChange}
+            <div className="flex-1 relative px-2">
+              <textarea
+                value={isRecording ? partial : text}
+                onChange={handleTextChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask anything..."
                 className="w-full bg-transparent text-white placeholder-gray-400 border-none outline-none py-3.5 text-sm resize-none overflow-hidden"
@@ -348,11 +327,10 @@ export const InputBar = ({
 
             {/* Send Button */}
             <div className="pr-3 flex items-center gap-2">
-              {(isInitializing || recording) && (
+              {(isInitializing || isRecording) && (
                 <button
                   onClick={() => {
-                    stopRecording();
-                    setIsInitializing(false);
+                    handleEndRecording();
                   }}
                   className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-full h-10 overflow-hidden hover:bg-blue-700 transition-colors cursor-pointer"
                 >
@@ -377,15 +355,15 @@ export const InputBar = ({
                   )}
                 </button>
               )}
-              
+
               <button
                 onClick={() => {
-                  if (recording) {
+                  if (isRecording) {
                     // Send the transcript when recording
                     const transcript = transcriptRef.current || (finalText + " " + partial).trim() || partial.trim();
                     if (transcript) {
                       onSend(selectedTool, transcript.trim());
-                      stopRecording();
+                      endSession();
                       // Reset transcript state after sending
                       setPartial("");
                       setFinalText("");
@@ -399,15 +377,15 @@ export const InputBar = ({
                     startAudio();
                   }
                 }}
-                disabled={isRecordingDisabled && !recording && !text.trim() && !selectedTool}
+                disabled={isRecordingDisabled && !isRecording && !text.trim() && !selectedTool}
                 className={`w-10 h-10 rounded-full bg-white flex items-center justify-center transition-all duration-300
-                  ${!isRecordingDisabled || recording || text.trim() || selectedTool
+                  ${!isRecordingDisabled || isRecording || text.trim() || selectedTool
                     ? 'hover:scale-110 shadow-lg hover:shadow-xl cursor-pointer'
                     : 'bg-gray-700/50 cursor-not-allowed opacity-50'
                   }`}
-                aria-label={recording || text.trim() || selectedTool ? "Send message" : "Start recording"}
+                aria-label={isRecording || text.trim() || selectedTool ? "Send message" : "Start recording"}
               >
-                {recording || text.trim() || selectedTool ? (
+                {isRecording || text.trim() || selectedTool ? (
                   <Send className="w-5 h-5 text-black" />
                 ) : (
                   /* Audio Waveform Icon */
@@ -484,4 +462,4 @@ export const InputBar = ({
       `}</style>
     </div>
   );
-};
+} 
