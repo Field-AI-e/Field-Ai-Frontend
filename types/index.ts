@@ -9,7 +9,7 @@ export interface Conversation {
 
 export interface Message {
     id: string
-    conversationId: string
+    conversationId?: string
     content: string
     role: string
     createdAt: Date

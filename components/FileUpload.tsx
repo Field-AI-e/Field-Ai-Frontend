@@ -1,8 +1,8 @@
+import { MessageAttachment } from '@/types';
 import { FileText, X } from 'lucide-react';
-import { AttachedFile } from '@/hooks/useFileUpload';
 
 interface FileUploadProps {
-  attachedFiles: AttachedFile[];
+  attachedFiles: MessageAttachment[];
   isUploading: boolean;
   onRemoveFile: (index: number) => void;
   onClearAllFiles?: () => void;

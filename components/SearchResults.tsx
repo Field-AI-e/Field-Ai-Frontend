@@ -62,7 +62,7 @@ export const SearchResults = ({ searchResults, thinkingProcess }: SearchResultsP
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleDownload(source.key, source.title);
+                                    handleDownload(source.key || "", source.title || "");
                                   }}
                                   className="p-1 text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-2"
                                   title="Download document"
