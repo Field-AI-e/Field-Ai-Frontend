@@ -1,13 +1,23 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { apiClient } from '@/utils/apiClient';
+import { API_BASE_URL, AUDIO_URL_PATH } from '@/types/contstants';
 import Image from 'next/image';
+
+// Google Places Autocomplete types
+declare global {
+  interface Window {
+    google: any;
+    initGooglePlaces: () => void;
+  }
+}
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
+  const [signupStep, setSignupStep] = useState(0);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -19,14 +29,137 @@ export default function LoginPage() {
     latitude: '',
     longitude: '',
     locationName: '',
-    organicOnly: false,
+    organicOnly: true,
     voiceModeEnabled: true,
-    role: 'user'
+    role: 'admin'
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [googleLoaded, setGoogleLoaded] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const autocompleteRef = useRef<HTMLInputElement | null>(null);
+  const placesAutocompleteRef = useRef<any>(null);
   const router = useRouter();
   const { login } = useAuth();
+
+  // Signup steps configuration with descriptions
+  const signupSteps = useMemo(() => [
+    { 
+      id: 'email', 
+      label: 'Email', 
+      description: 'Please enter your email address. This will be used to log in to your account.',
+      required: true 
+    },
+    { 
+      id: 'password', 
+      label: 'Password', 
+      description: 'Create a secure password with at least 6 characters. Make sure to use a combination of letters and numbers.',
+      required: true 
+    },
+    { 
+      id: 'firstName', 
+      label: 'First Name', 
+      description: 'What is your first name? This helps us personalize your experience.',
+      required: true 
+    },
+    { 
+      id: 'farmName', 
+      label: 'Farm Name', 
+      description: 'What is the name of your farm? This is optional but helps us provide better recommendations.',
+      required: false 
+    },
+    { 
+      id: 'mainCrop', 
+      label: 'Main Crop', 
+      description: 'What is your main crop? This helps us tailor advice and recommendations to your farming needs.',
+      required: false 
+    },
+    { 
+      id: 'farmSizeHectares', 
+      label: 'Farm Size', 
+      description: 'How large is your farm in hectares? This information helps us provide accurate recommendations.',
+      required: false 
+    },
+    { 
+      id: 'locationName', 
+      label: 'Location', 
+      description: 'Where is your farm located? Start typing your location and select from the suggestions. We\'ll automatically get the coordinates for accurate weather information.',
+      required: false 
+    },
+  ], []);
+
+  const totalSteps = signupSteps.length;
+
+  // Load Google Places API
+  useEffect(() => {
+    if (isLogin) return;
+
+    const loadGooglePlaces = () => {
+      if (window.google && window.google.maps && window.google.maps.places) {
+        setGoogleLoaded(true);
+        return;
+      }
+
+      // Check if script already exists
+      const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
+      if (existingScript) {
+        setGoogleLoaded(true); 
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}&libraries=places`;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        setGoogleLoaded(true);
+      };
+      script.onerror = () => {
+        console.error('Failed to load Google Maps API. Please add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to your .env.local file.');
+        setError('Failed to load Google Maps. Please configure your API key in .env.local');
+      };
+      document.head.appendChild(script);
+    };
+
+    loadGooglePlaces();
+  }, [isLogin]);
+
+  // Initialize Places Autocomplete when location step is active
+  useEffect(() => {
+    if (!isLogin && signupStep === 6 && googleLoaded && autocompleteRef.current && window.google?.maps?.places) {
+      // Cleanup existing autocomplete
+      if (placesAutocompleteRef.current && window.google.maps.event) {
+        window.google.maps.event.clearInstanceListeners(placesAutocompleteRef.current);
+      }
+
+      const autocomplete = new window.google.maps.places.Autocomplete(
+        autocompleteRef.current,
+        { types: ['geocode', 'establishment'] }
+      );
+
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        if (place.geometry) {
+          const location = place.geometry.location;
+          setFormData(prev => ({
+            ...prev,
+            locationName: place.formatted_address || place.name || '',
+            latitude: location.lat().toString(),
+            longitude: location.lng().toString(),
+          }));
+        }
+      });
+
+      placesAutocompleteRef.current = autocomplete;
+    }
+
+    return () => {
+      if (placesAutocompleteRef.current && window.google?.maps?.event) {
+        window.google.maps.event.clearInstanceListeners(placesAutocompleteRef.current);
+      }
+    };
+  }, [signupStep, googleLoaded, isLogin]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,29 +169,29 @@ export default function LoginPage() {
     try {
       const endpoint = isLogin ? '/auth/login' : '/auth/register';
       // Convert form data to match backend expectations
-      const payload = isLogin 
+      const payload = isLogin
         ? { email: formData.email, password: formData.password }
         : {
-            email: formData.email,
-            password: formData.password,
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            farmName: formData.farmName || null,
-            mainCrop: formData.mainCrop || null,
-            farmSizeHectares: formData.farmSizeHectares ? parseFloat(formData.farmSizeHectares) : null,
-            latitude: formData.latitude ? parseFloat(formData.latitude) : null,
-            longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+          email: formData.email,
+          password: formData.password,
+          firstName: formData.firstName,
+          lastName: '',
+          farmName: formData.farmName || null,
+          mainCrop: formData.mainCrop || null,
+          farmSizeHectares: formData.farmSizeHectares ? parseFloat(formData.farmSizeHectares) : null,
+          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
             locationName: formData.locationName || null,
-            organicOnly: formData.organicOnly,
+            organicOnly: true,
             voiceModeEnabled: formData.voiceModeEnabled,
-            role: formData.role,
-          };
-      const data = await apiClient.post<{access_token: string, user: any}>(endpoint, payload);
-      
+            role: 'admin',
+        };
+      const data = await apiClient.post<{ access_token: string, user: any }>(endpoint, payload);
+
       if (data) {
         console.log('Login successful, data:', data);
         login(data.access_token, data.user);
-        
+
         console.log('Redirecting to dashboard...');
         router.push('/');
       } else {
@@ -81,11 +214,114 @@ export default function LoginPage() {
     });
   };
 
+  // Map step IDs to audio file names
+  const getAudioFileName = (stepId: string): string | null => {
+    const audioMap: Record<string, string> = {
+      'email': 'email.mp3',
+      'password': 'password.mp3',
+      'firstName': 'name.mp3',
+      'farmName': 'farm_name.mp3',
+      'mainCrop': 'main_crop.mp3',
+      'farmSizeHectares': 'farm_size.mp3',
+      'locationName': 'location.mp3',
+    };
+    return audioMap[stepId] || null;
+  };
+
+  // Play voice for current step using audio files
+  const playStepVoice = useCallback((stepIndex: number) => {
+    const step = signupSteps[stepIndex];
+    if (!step) return;
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    // Cancel any speech synthesis if running
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    const audioFileName = getAudioFileName(step.id);
+    if (!audioFileName) {
+      console.warn(`No audio file found for step: ${step.id}`);
+      return;
+    }
+
+    const audioUrl = `${AUDIO_URL_PATH}/voice/${audioFileName}`;
+    console.log('Audio URL:', audioUrl);
+    const audio = new Audio(audioUrl);
+    
+    audio.onloadstart = () => setAudioPlaying(true);
+    audio.onended = () => setAudioPlaying(false);
+    audio.onerror = (e) => {
+      console.error('Error playing audio:', e);
+      setAudioPlaying(false);
+    };
+    
+    audio.play().catch((err) => {
+      console.error('Failed to play audio:', err);
+      setAudioPlaying(false);
+    });
+
+    audioRef.current = audio;
+  }, [signupSteps]);
+
+  // Play voice when step changes
+  useEffect(() => {
+    if (!isLogin && signupStep >= 0) {
+      playStepVoice(signupStep);
+    }
+    
+    // Cleanup on unmount
+    return () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [signupStep, isLogin, playStepVoice]);
+
+  const handleNext = () => {
+    const currentStep = signupSteps[signupStep];
+    // Validate required fields
+    if (currentStep.required) {
+      if (currentStep.id === 'coordinates') {
+        // Coordinates step doesn't need validation
+      } else if (!formData[currentStep.id as keyof typeof formData]) {
+        setError(`${currentStep.label} is required`);
+        return;
+      }
+    }
+    setError('');
+    if (signupStep < totalSteps - 1) {
+      setSignupStep(signupStep + 1);
+    }
+  };
+
+  const handleBack = () => {
+    if (signupStep > 0) {
+      setSignupStep(signupStep - 1);
+      setError('');
+    }
+  };
+
+  const handleSignupToggle = () => {
+    setIsLogin(!isLogin);
+    setSignupStep(0);
+    setError('');
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
       {/* Animated Dark Gradient Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-black to-gray-800 animate-gradient"></div>
-      
+
       {/* Floating Orbs - Dark Theme */}
       <div className="absolute top-20 left-20 w-72 h-72 bg-gray-700 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob"></div>
       <div className="absolute top-40 right-20 w-72 h-72 bg-gray-600 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
@@ -114,14 +350,14 @@ export default function LoginPage() {
               {isLogin ? "Don't have an account? " : "Already have an account? "}
               <button
                 type="button"
-                onClick={() => setIsLogin(!isLogin)}
+                onClick={handleSignupToggle}
                 className="cursor-pointer font-semibold text-gray-300 hover:text-white transition-colors duration-200 underline underline-offset-4"
               >
                 {isLogin ? 'Sign up' : 'Sign in'}
               </button>
             </p>
           </div>
-          
+
           {/* Form */}
           <form className="space-y-6" onSubmit={handleSubmit}>
             {error && (
@@ -132,229 +368,340 @@ export default function LoginPage() {
 
             <div className="space-y-6">
               {/* Email Input with Floating Label */}
-              <div className="floating-input-container">
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="floating-input"
-                  placeholder=" "
-                />
-                <label htmlFor="email" className="floating-label">
-                  Email address
-                </label>
-              </div>
+              {isLogin && <>
+                <div className="floating-input-container">
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    required
+                    value={formData.email}
+                    onChange={handleChange}
+                    className="floating-input"
+                    placeholder=" "
+                  />
+                  <label htmlFor="email" className="floating-label">
+                    Email address
+                  </label>
+                </div>
 
-              {/* Password Input with Floating Label */}
-              <div className="floating-input-container">
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  required
-                  minLength={6}
-                  value={formData.password}
-                  onChange={handleChange}
-                  className="floating-input"
-                  placeholder=" "
-                />
-                <label htmlFor="password" className="floating-label">
-                  Password
-                </label>
-              </div>
-
-              {/* Signup Fields */}
+                {/* Password Input with Floating Label */}
+                <div className="floating-input-container">
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    required
+                    minLength={6}
+                    value={formData.password}
+                    onChange={handleChange}
+                    className="floating-input"
+                    placeholder=" "
+                  />
+                  <label htmlFor="password" className="floating-label">
+                    Password
+                  </label>
+                </div>
+              </>}
+              {/* Signup Multi-Step Wizard */}
               {!isLogin && (
                 <div className="space-y-6 animate-fadeIn">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="floating-input-container">
-                      <input
-                        id="firstName"
-                        name="firstName"
-                        type="text"
-                        required
-                        value={formData.firstName}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="firstName" className="floating-label">
-                        First Name
-                      </label>
-                    </div>
-                    <div className="floating-input-container">
-                      <input
-                        id="lastName"
-                        name="lastName"
-                        type="text"
-                        required
-                        value={formData.lastName}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="lastName" className="floating-label">
-                        Last Name
-                      </label>
+                  {/* Progress Indicator */}
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        {signupSteps.map((step, index) => (
+                          <div
+                            key={step.id}
+                            className={`flex-1 h-1 rounded-full transition-all ${index <= signupStep
+                                ? 'bg-white/60'
+                                : 'bg-white/20'
+                              }`}
+                          />
+                        ))}
+                      </div>
+                      <p className="text-xs text-white/60 text-center">
+                        Step {signupStep + 1} of {totalSteps}
+                      </p>
                     </div>
                   </div>
 
-                  {/* Farm Profile Section */}
-                  <div className="border-t border-white/20 pt-4 mt-4">
-                    <h3 className="text-white font-semibold mb-4 text-sm">Farm Profile</h3>
-                    
-                    <div className="floating-input-container">
-                      <input
-                        id="farmName"
-                        name="farmName"
-                        type="text"
-                        value={formData.farmName}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="farmName" className="floating-label">
-                        Farm Name (optional)
-                      </label>
-                    </div>
-
-                    <div className="floating-input-container mt-4">
-                      <input
-                        id="mainCrop"
-                        name="mainCrop"
-                        type="text"
-                        value={formData.mainCrop}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="mainCrop" className="floating-label">
-                        Main Crop (optional)
-                      </label>
-                    </div>
-
-                    <div className="floating-input-container mt-4">
-                      <input
-                        id="farmSizeHectares"
-                        name="farmSizeHectares"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={formData.farmSizeHectares}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="farmSizeHectares" className="floating-label">
-                        Farm Size (Hectares) (optional)
-                      </label>
-                    </div>
+                  {/* Step Description */}
+                  <div className="mb-6 text-center">
+                    <p className="text-white/80 text-sm leading-relaxed">
+                      {signupSteps[signupStep]?.description}
+                    </p>
+                    {audioPlaying && (
+                      <div className="mt-2 flex items-center justify-center gap-2">
+                        <div className="w-2 h-2 bg-white/60 rounded-full animate-pulse"></div>
+                        <span className="text-xs text-white/60">Playing audio...</span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Location Section */}
-                  <div className="border-t border-white/20 pt-4 mt-4">
-                    <h3 className="text-white font-semibold mb-4 text-sm">Location</h3>
-                    
-                    <div className="floating-input-container">
-                      <input
-                        id="locationName"
-                        name="locationName"
-                        type="text"
-                        value={formData.locationName}
-                        onChange={handleChange}
-                        className="floating-input"
-                        placeholder=" "
-                      />
-                      <label htmlFor="locationName" className="floating-label">
-                        Location Name (e.g., Limpopo, SA) (optional)
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 mt-4">
+                  {/* Step Content */}
+                  <div className="min-h-[200px]">
+                    {signupStep === 0 && (
                       <div className="floating-input-container">
                         <input
-                          id="latitude"
-                          name="latitude"
-                          type="number"
-                          step="0.000001"
-                          value={formData.latitude}
+                          id="email"
+                          name="email"
+                          type="email"
+                          required
+                          value={formData.email}
                           onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
                           className="floating-input"
                           placeholder=" "
+                          autoFocus
                         />
-                        <label htmlFor="latitude" className="floating-label">
-                          Latitude (optional)
+                        <label htmlFor="email" className="floating-label">
+                          Email address
                         </label>
                       </div>
+                    )}
+
+                    {signupStep === 1 && (
                       <div className="floating-input-container">
                         <input
-                          id="longitude"
-                          name="longitude"
-                          type="number"
-                          step="0.000001"
-                          value={formData.longitude}
+                          id="password"
+                          name="password"
+                          type="password"
+                          required
+                          minLength={6}
+                          value={formData.password}
                           onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
                           className="floating-input"
                           placeholder=" "
+                          autoFocus
                         />
-                        <label htmlFor="longitude" className="floating-label">
-                          Longitude (optional)
+                        <label htmlFor="password" className="floating-label">
+                          Password (min 6 characters)
                         </label>
                       </div>
-                    </div>
+                    )}
+
+                    {signupStep === 2 && (
+                      <div className="floating-input-container">
+                        <input
+                          id="firstName"
+                          name="firstName"
+                          type="text"
+                          required
+                          value={formData.firstName}
+                          onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
+                          className="floating-input"
+                          placeholder=" "
+                          autoFocus
+                        />
+                        <label htmlFor="firstName" className="floating-label">
+                          First Name
+                        </label>
+                      </div>
+                    )}
+
+                    {signupStep === 3 && (
+                      <div className="floating-input-container">
+                        <input
+                          id="farmName"
+                          name="farmName"
+                          type="text"
+                          value={formData.farmName}
+                          onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
+                          className="floating-input"
+                          placeholder=" "
+                          autoFocus
+                        />
+                        <label htmlFor="farmName" className="floating-label">
+                          Farm Name (optional)
+                        </label>
+                      </div>
+                    )}
+
+                    {signupStep === 4 && (
+                      <div className="floating-input-container">
+                        <input
+                          id="mainCrop"
+                          name="mainCrop"
+                          type="text"
+                          value={formData.mainCrop}
+                          onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
+                          className="floating-input"
+                          placeholder=" "
+                          autoFocus
+                        />
+                        <label htmlFor="mainCrop" className="floating-label">
+                          Main Crop (optional)
+                        </label>
+                      </div>
+                    )}
+
+                    {signupStep === 5 && (
+                      <div className="floating-input-container">
+                        <input
+                          id="farmSizeHectares"
+                          name="farmSizeHectares"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={formData.farmSizeHectares}
+                          onChange={handleChange}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleNext();
+                            }
+                          }}
+                          className="floating-input"
+                          placeholder=" "
+                          autoFocus
+                        />
+                        <label htmlFor="farmSizeHectares" className="floating-label">
+                          Farm Size (Hectares) (optional)
+                        </label>
+                      </div>
+                    )}
+
+                    {signupStep === 6 && (
+                      <div className="floating-input-container">
+                        <input
+                          ref={autocompleteRef}
+                          id="locationName"
+                          name="locationName"
+                          type="text"
+                          value={formData.locationName}
+                          onChange={handleChange}
+                          onKeyDown={(e) => {
+                            // Prevent form submission on Enter when selecting from autocomplete
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              // Small delay to allow autocomplete to process
+                              setTimeout(() => handleNext(), 100);
+                            }
+                          }}
+                          className="floating-input"
+                          placeholder=" "
+                          autoFocus
+                          disabled={!googleLoaded}
+                        />
+                        <label htmlFor="locationName" className="floating-label">
+                          {googleLoaded ? 'Start typing your location...' : 'Loading location services...'}
+                        </label>
+                        {!googleLoaded && (
+                          <div className="text-xs text-white/60 mt-2 space-y-1">
+                            {process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ? (
+                              <p>Loading Google Maps...</p>
+                            ) : (
+                              <div>
+                                <p className="text-yellow-400 mb-1">⚠️ Google Maps API key not configured</p>
+                                <p>Add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to your .env.local file</p>
+                                <p className="text-xs mt-1 opacity-75">Get your key from: console.cloud.google.com</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+
                   </div>
 
-                  {/* Preferences Section */}
-                  <div className="border-t border-white/20 pt-4 mt-4">
-                    <h3 className="text-white font-semibold mb-4 text-sm">Preferences</h3>
-                    
-                    <div className="flex items-center gap-3 mb-4">
-                      <input
-                        id="organicOnly"
-                        name="organicOnly"
-                        type="checkbox"
-                        checked={formData.organicOnly}
-                        onChange={handleChange}
-                        className="w-5 h-5 rounded border-white/30 bg-white/10 text-purple-600 focus:ring-purple-500 focus:ring-2"
-                      />
-                      <label htmlFor="organicOnly" className="text-white text-sm cursor-pointer">
-                        Organic Only
-                      </label>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <input
-                        id="voiceModeEnabled"
-                        name="voiceModeEnabled"
-                        type="checkbox"
-                        checked={formData.voiceModeEnabled}
-                        onChange={handleChange}
-                        className="w-5 h-5 rounded border-white/30 bg-white/10 text-purple-600 focus:ring-purple-500 focus:ring-2"
-                      />
-                      <label htmlFor="voiceModeEnabled" className="text-white text-sm cursor-pointer">
-                        Enable Voice Mode (default: enabled)
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="floating-input-container">
-                    <select
-                      id="role"
-                      name="role"
-                      value={formData.role}
-                      onChange={handleChange}
-                      className="floating-input"
+                  {/* Navigation Buttons */}
+                  <div className="flex items-center justify-between gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (audioRef.current) {
+                          audioRef.current.pause();
+                          audioRef.current = null;
+                        }
+                        if ('speechSynthesis' in window) {
+                          window.speechSynthesis.cancel();
+                        }
+                        handleBack();
+                      }}
+                      disabled={signupStep === 0}
+                      className={`px-4 py-2 rounded-xl transition-all ${signupStep === 0
+                          ? 'opacity-50 cursor-not-allowed'
+                          : 'bg-white/10 hover:bg-white/20 text-white cursor-pointer'
+                        }`}
                     >
-                      <option value="user" className="bg-gray-900">User</option>
-                      <option value="manager" className="bg-gray-900">Manager</option>
-                      <option value="admin" className="bg-gray-900">Admin</option>
-                    </select>
-                    <label htmlFor="role" className="floating-label-select">
-                      Role
-                    </label>
+                      Back
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => playStepVoice(signupStep)}
+                        className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-all"
+                        title="Replay audio"
+                      >
+                        🔊
+                      </button>
+                      {signupStep < totalSteps - 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (audioRef.current) {
+                              audioRef.current.pause();
+                              audioRef.current = null;
+                            }
+                            if ('speechSynthesis' in window) {
+                              window.speechSynthesis.cancel();
+                            }
+                            handleNext();
+                          }}
+                          className="px-6 py-2 bg-gradient-to-r from-gray-700 via-gray-600 to-gray-700 hover:from-gray-600 hover:via-gray-500 hover:to-gray-600 text-white rounded-xl font-semibold transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg"
+                        >
+                          Next
+                        </button>
+                      ) : (
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          onClick={() => {
+                            if (audioRef.current) {
+                              audioRef.current.pause();
+                              audioRef.current = null;
+                            }
+                            if ('speechSynthesis' in window) {
+                              window.speechSynthesis.cancel();
+                            }
+                          }}
+                          className="px-6 py-2 bg-gradient-to-r from-gray-700 via-gray-600 to-gray-700 hover:from-gray-600 hover:via-gray-500 hover:to-gray-600 text-white rounded-xl font-semibold transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {loading ? 'Creating Account...' : 'Create Account'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
