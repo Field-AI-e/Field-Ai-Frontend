@@ -1,7 +1,7 @@
 import { Message } from '@/types';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Markdown from './Markdown';
-import { FileText, Volume2, Download } from 'lucide-react';
+import { FileText, Volume2, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import Image from 'next/image';
 
 interface ChatMessagesProps {
@@ -11,7 +11,9 @@ interface ChatMessagesProps {
 }
 
 export const ChatMessages = ({ messages, thinkingProcess, onShowSources }: ChatMessagesProps) => {
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [isThinkingExpanded, setIsThinkingExpanded] = useState(false);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -166,16 +168,50 @@ export const ChatMessages = ({ messages, thinkingProcess, onShowSources }: ChatM
       {/* Thinking process - below messages */}
       {thinkingProcess.length > 0 && (
         <div className="max-w-4xl mx-auto mt-6">
-          <div className="bg-gray-800 rounded-lg p-4">
-            <div className="flex items-center space-x-3">
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+          <div className="rounded-lg p-4">
+            <div className="flex items-start space-x-3">
+              <div className="flex space-x-1 pt-1">
+                <div className="w-2 h-2 bg-white rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
               </div>
-              <span className="text-gray-300 text-sm">
-                {thinkingProcess[thinkingProcess.length - 1]}
-              </span>
+              <div className="flex-1 max-w-[35vw]">
+                <button
+                  onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
+                  className="w-full text-left shimmer-effect"
+                >
+                  <div className="text-gray-300 text-sm relative">
+                    {isThinkingExpanded ? (
+                      <Markdown content={thinkingProcess[thinkingProcess.length - 1]} />
+                    ) : (
+                      <div className="line-clamp-1">
+                        {(() => {
+                          const content = thinkingProcess[thinkingProcess.length - 1];
+                          // Extract first line, removing markdown formatting for preview
+                          const firstLine = content.split('\n')[0].replace(/\*\*/g, '').trim();
+                          return firstLine || content.substring(0, 100) + '...';
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                </button>
+                <button
+                  onClick={() => setIsThinkingExpanded(!isThinkingExpanded)}
+                  className="mt-2 flex items-center gap-1 text-gray-400 hover:text-gray-300 text-xs transition-colors"
+                >
+                  {isThinkingExpanded ? (
+                    <>
+                      <ChevronUp size={14} />
+                      <span>Show less</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown size={14} />
+                      <span>Show more</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

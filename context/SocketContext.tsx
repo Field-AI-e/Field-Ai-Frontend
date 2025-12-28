@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/types/contstants';
+import { useAuth } from '@/context/AuthContext';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -22,49 +23,60 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [lastDataEvent, setLastDataEvent] = useState<any>(null);
-
+  const { user } = useAuth();
   useEffect(() => {
-    const newSocket = io(API_BASE_URL, {
-      transports: ['websocket'],
-      autoConnect: true,
-      reconnection: true,
-    });
+    if (user) {
+      const newSocket = io(API_BASE_URL, {
+        transports: ['websocket'],
+        autoConnect: true,
+        reconnection: true,
+        auth: {
+          userId: user.id
+        }
+      });
 
-    const handleConnect = () => {
-      setIsConnected(true);
-    };
+      const handleConnect = () => {
+        setIsConnected(true);
+      };
 
-    const handleDisconnect = () => {
-      setIsConnected(false);
-    };
+      const handleDisconnect = () => {
+        setIsConnected(false);
+      };
 
-    const handleDataReceived = (data: any) => {
-      setLastDataEvent(data);
-    };
+      const handleDataReceived = (data: any) => {
+        setLastDataEvent(data);
+      };
 
-    const handleError = (error: unknown) => {
-      console.error('[socket] error', error);
-    };
+      const handleError = (error: unknown) => {
+        console.error('[socket] error', error);
+      };
 
-    setSocket(newSocket);
-    newSocket.on('connect', handleConnect);
-    newSocket.on('disconnect', handleDisconnect);
-    newSocket.on('data-received', handleDataReceived);
-    newSocket.on('connect_error', handleError);
-    newSocket.on('error', handleError);
+      setSocket(newSocket);
+      newSocket.on('connect', handleConnect);
+      newSocket.on('disconnect', handleDisconnect);
+      newSocket.on('data-received', handleDataReceived);
+      newSocket.on('connect_error', handleError);
+      newSocket.on('error', handleError);
+      newSocket.emit('link_user_to_socket', { userId: 3 });
 
-    return () => {
-      newSocket.off('connect', handleConnect);
-      newSocket.off('disconnect', handleDisconnect);
-      newSocket.off('data-received', handleDataReceived);
-      newSocket.off('connect_error', handleError);
-      newSocket.off('error', handleError);
-      newSocket.disconnect();
+      return () => {
+        newSocket.off('connect', handleConnect);
+        newSocket.off('disconnect', handleDisconnect);
+        newSocket.off('data-received', handleDataReceived);
+        newSocket.off('connect_error', handleError);
+        newSocket.off('error', handleError);
+        newSocket.disconnect();
+        setSocket(null);
+        setIsConnected(false);
+        setLastDataEvent(null);
+      };
+    }else{
       setSocket(null);
       setIsConnected(false);
       setLastDataEvent(null);
-    };
-  }, []);
+    }
+
+  }, [user]);
 
   const value = useMemo(
     () => ({
